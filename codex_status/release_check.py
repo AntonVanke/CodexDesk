@@ -4,7 +4,8 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from version import APP_VERSION
 
-RELEASE_API = 'https://api.github.com/repos/AntonVanke/CodexDesk/releases/latest'
+RELEASE_ROOT = 'https://github.com/AntonVanke/CodexDesk/releases'
+RELEASE_MANIFEST = RELEASE_ROOT+'/latest/download/update.json'
 
 
 class ReleaseCheck(QObject):
@@ -28,7 +29,7 @@ class ReleaseCheck(QObject):
         if self.stopped or self.reply is not None:
             return
         self.checking.emit()
-        self.get_json(RELEASE_API,self.release_received)
+        self.get_json(RELEASE_MANIFEST,self.manifest_received)
 
     def get_json(self, url, received):
         request = QNetworkRequest(QUrl(url))
@@ -51,14 +52,10 @@ class ReleaseCheck(QObject):
                 reply.deleteLater()
         reply.finished.connect(finished)
 
-    def release_received(self, release):
-        self.release = release
-        self.assets = {asset['name']:asset['browser_download_url'] for asset in release['assets']}
-        self.get_json(self.assets['update.json'],self.manifest_received)
-
     def manifest_received(self, manifest):
-        self.found.emit({'url':self.release['html_url'],'tag':self.release['tag_name'],
-            **{kind:{'version':manifest[kind]['version'],'url':self.assets[manifest[kind]['asset']]}
+        tag='v'+manifest['app']['version']
+        self.found.emit({'url':RELEASE_ROOT+'/tag/'+tag,'tag':tag,
+            **{kind:{'version':manifest[kind]['version'],'url':RELEASE_ROOT+'/download/'+tag+'/'+manifest[kind]['asset']}
                for kind in ('app','firmware')}})
 
     def stop(self):
