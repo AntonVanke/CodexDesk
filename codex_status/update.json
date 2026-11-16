@@ -1,4 +1,4 @@
 {
-  "app": {"version": "1.7.1", "asset": "CodexDesk.exe"},
+  "app": {"version": "1.7.2", "asset": "CodexDesk.exe"},
   "firmware": {"version": "1.6.0", "asset": "codex_status.img"}
 }

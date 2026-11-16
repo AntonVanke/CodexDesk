@@ -122,6 +122,31 @@ def label(text, name=None):
     return result
 
 
+class FramelessDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent,Qt.WindowType.Tool|Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.drag_offset=None
+
+    def mousePressEvent(self, event):
+        if event.button()==Qt.MouseButton.LeftButton and event.position().y()<64:
+            self.drag_offset=event.globalPosition().toPoint()-self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint()-self.drag_offset)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.drag_offset=None
+        super().mouseReleaseEvent(event)
+
+
 class Window(QWidget):
     def __init__(self, icon):
         super().__init__()
@@ -314,8 +339,7 @@ class Window(QWidget):
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.status)
 
-        self.preferences=QDialog(self,Qt.WindowType.Dialog|Qt.WindowType.FramelessWindowHint)
-        self.preferences.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.preferences=FramelessDialog(self)
         self.preferences.setFixedWidth(390)
         outer=QVBoxLayout(self.preferences);outer.setContentsMargins(0,0,0,0)
         settings = QFrame()
@@ -388,7 +412,9 @@ class Window(QWidget):
     def open_settings(self):
         self.preferences.adjustSize()
         self.preferences.move(self.geometry().center()-self.preferences.rect().center())
-        self.preferences.exec()
+        self.preferences.show()
+        self.preferences.raise_()
+        self.preferences.activateWindow()
 
     def refresh_pairing_ui(self):
         self.pair_card.setVisible(not bool(self.address))
@@ -440,8 +466,7 @@ class Window(QWidget):
             self.bridge.set_profile(self.screen_profile())
 
     def edit_screen_style(self):
-        dialog=QDialog(self.preferences,Qt.WindowType.Dialog|Qt.WindowType.FramelessWindowHint)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        dialog=FramelessDialog(self.preferences)
         dialog.setFixedWidth(360)
         outer=QVBoxLayout(dialog);outer.setContentsMargins(0,0,0,0)
         panel=QFrame();panel.setObjectName('settings');outer.addWidget(panel)
