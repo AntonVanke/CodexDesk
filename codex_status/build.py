@@ -56,7 +56,7 @@ def main():
     header = bytearray(b'\xff'*64)
     header[:2] = b'\x70\x51'
     struct.pack_into('<II', header, 4, len(data), zlib.crc32(data))
-    header[12:28] = b'1.5.0\0'.ljust(16, b'\xff')
+    header[12:28] = b'1.6.0\0'.ljust(16, b'\xff')
     struct.pack_into('<I', header, 28, int(time.time()))
     header[32] = 0
     (OUT/'codex_status.img').write_bytes(header+data)

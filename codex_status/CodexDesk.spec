@@ -6,6 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('../Get-CodexUsage.ps1', '.'),
+           ('assets', 'assets'),
            ('build/codex_status.img', 'build')],
     hiddenimports=[],
     hookspath=[],

@@ -22,6 +22,8 @@ static uint16_t colors[4]={RGB(245,247,247),RGB(23,43,50),RGB(78,100,110),RGB(22
 static uint16_t accent_color=RGB(18,113,90);
 static uint8_t name_bitmap[NAME_BITMAP_BYTES];
 static uint8_t task_bitmap[TASK_BITMAP_BYTES];
+static uint8_t model_bitmap[MODEL_BITMAP_BYTES];
+static uint8_t dim5[32], dim6[64];
 static unsigned task_layout, task_kind, task_waiting, task_choices;
 
 volatile uint32_t display_frames;
@@ -51,6 +53,7 @@ static void command(uint8_t c, const uint8_t *p, unsigned n) {
 }
 static void delay(unsigned n) { while(n--) __asm volatile("nop"); }
 void lcd_init(void) {
+    display_brightness(100);
     R16(0x50000004)=(R16(0x50000004)&~0x300)|0x800;
     R16(0x50003002)=8;
     R16(0x5000300C)=0x300;
@@ -172,19 +175,20 @@ static void scene(void) {
         }
         text(139,174,"配对码",14,MUTED);
         text(74,195,pairing_code,20,INK);
+        text(280,220,"离线",14,MUTED);
         return;
     }
     username();
-    unsigned link_color=!connected?MUTED:!valid||stale?AMBER:GREEN;
+    unsigned link_color=stale?RED:!valid?AMBER:GREEN;
     for(int x=-3;x<=3;x++) for(int y=-3;y<=3;y++)
         if(x*x+y*y<=9) pixel(198+x,22+y,link_color);
-    if(valid) {
+    if(clock_now) {
         uint32_t t=clock_now+28800;
         snprintf(buf,sizeof(buf),"%02lu:%02lu:%02lu",(unsigned long)(t/3600%24),(unsigned long)(t/60%60),(unsigned long)(t%60));
     } else strcpy(buf,"--:--:--");
     text(213,11,buf,20,INK);
     unsigned color=snapshot.remaining>70?RGB(35,169,115):snapshot.remaining>=50?RGB(211,164,22):snapshot.remaining>=20?RGB(232,124,45):RGB(222,76,85);
-    text(279,53,"剩余",14,MUTED);
+    text(279,53,stale?"离线":"剩余",14,stale?RED:MUTED);
     rect(288,99,8,93,TRACK);
     if(valid) {
         unsigned height=93*snapshot.remaining/100;
@@ -218,38 +222,40 @@ static void scene(void) {
         int end=text((280-width-22)/2,87,buf,64,INK);
         text(end+4,127,"%",20,INK);
     }
-    if(task_layout) {
-        rect(16,201,248,1,TRACK);
-        if(valid) date_string(buf,snapshot.reset_at); else strcpy(buf,"--/-- --:--");
-        text(text(16,211,buf,14,MUTED)+5,211,"重置",14,MUTED);
-        if(valid&&snapshot.resets!=255) snprintf(buf,sizeof(buf),"可用 %u 次",snapshot.resets);
-        else strcpy(buf,"可用 -- 次");
-        text(201,211,buf,14,INK);
-    } else {
-        text(16,186,"重置时间",14,MUTED);
-        if(valid) date_string(buf,snapshot.reset_at); else strcpy(buf,"--/-- --:--");
-        text(146,181,buf,20,INK);
-        text(16,215,"可用重置",14,MUTED);
-        if(valid&&snapshot.resets!=255) snprintf(buf,sizeof(buf),"%u 次",snapshot.resets);
-        else strcpy(buf,"-- 次");
-        unsigned count_width=valid&&snapshot.resets!=255?(snapshot.resets<10?12:snapshot.resets<100?24:36):18;
-        text(238-count_width,210,buf,20,INK);
+    rect(16,199,288,1,TRACK);
+    if(valid) date_string(buf,snapshot.reset_at); else strcpy(buf,"--/-- --:--");
+    text(text(16,203,buf,14,MUTED)+3,203,"重置",14,MUTED);
+    if(valid&&snapshot.resets!=255) snprintf(buf,sizeof(buf),"剩余 %u 次重置",snapshot.resets);
+    else strcpy(buf,"剩余 -- 次重置");
+    text(16,221,buf,14,INK);
+    for(unsigned x=0;x<136;x++) {
+        if(x+176<column || x+176>=column+4) continue;
+        for(unsigned y=0;y<32;y++)
+            if(model_bitmap[y*17+x/8]&(0x80>>(x%8))) pixel(176+x,203+y,MUTED);
     }
 }
 void display_layout(unsigned layout) { task_layout=layout; }
+void display_brightness(unsigned percent) {
+    for(unsigned i=0;i<32;i++) dim5[i]=i*percent/100;
+    for(unsigned i=0;i<64;i++) dim6[i]=i*percent/100;
+}
+void display_model(unsigned offset,const uint8_t *data,unsigned length) { memcpy(model_bitmap+offset,data,length); }
 void display_task_frame(const uint8_t *packed,unsigned length,unsigned kind,unsigned waiting,unsigned choices) {
     unsigned out=0;
+    unsigned delta=kind&128;
     for(unsigned i=0;i<length;) {
         unsigned control=packed[i++], count=(control&127)+1;
         if(out+count>TASK_BITMAP_BYTES) return;
-        if(control&128) memset(task_bitmap+out,0,count);
+        if(control&128) { if(!delta) memset(task_bitmap+out,0,count); }
         else {
             if(i+count>length) return;
-            memcpy(task_bitmap+out,packed+i,count); i+=count;
+            if(delta) for(unsigned j=0;j<count;j++) task_bitmap[out+j]^=packed[i+j];
+            else memcpy(task_bitmap+out,packed+i,count);
+            i+=count;
         }
         out+=count;
     }
-    task_kind=kind; task_waiting=waiting; task_choices=choices;
+    task_kind=kind&127; task_waiting=waiting; task_choices=choices;
 }
 void display_profile(unsigned theme,unsigned accent,const uint8_t *name) {
     static const uint16_t palettes[2][4]={
@@ -289,7 +295,8 @@ int display_step(void) {
     command(0x2b,p,4); command(0x2c,p,0);
     mode(1,2); dc(1); cs(0);
     for(unsigned x=0;x<4;x++) for(unsigned y=240-bottom;y<240-top;y++) {
-        while(SPI&0x800) {} TX=strip[x*240+y];
+        uint16_t color=strip[x*240+y];
+        while(SPI&0x800) {} TX=(dim5[color>>11]<<11)|(dim6[(color>>5)&63]<<5)|dim5[color&31];
     }
     idle(); cs(1); R16(0x50001206)=1; (void)TX; SPI=0;
     for(unsigned i=0;i<6;i++) R16(pins[i])=saved[i];

@@ -128,7 +128,7 @@
 #endif
 
 /// Firmware Revision
-#define APP_DIS_FIRM_REV_STR            "1.5.0"
+#define APP_DIS_FIRM_REV_STR            "1.6.0"
 #define APP_DIS_FIRM_REV_STR_LEN        (sizeof(APP_DIS_FIRM_REV_STR) - 1)
 
 /// Software Revision String

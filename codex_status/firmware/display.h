@@ -3,6 +3,7 @@
 #include <stdint.h>
 #define NAME_BITMAP_BYTES (168*24/8)
 #define TASK_BITMAP_BYTES (248*160/8)
+#define MODEL_BITMAP_BYTES (136*32/8)
 struct __attribute__((packed)) quota_packet {
     uint8_t magic[2], version, remaining, resets, flags;
     uint32_t now, reset_at, window_minutes;
@@ -17,5 +18,7 @@ void display_clock_request(uint32_t now);
 void display_upgrade_request(unsigned stage, unsigned percent, unsigned phase);
 void display_profile(unsigned theme, unsigned accent, const uint8_t *name);
 void display_layout(unsigned layout);
+void display_brightness(unsigned percent);
+void display_model(unsigned offset,const uint8_t *data,unsigned length);
 void display_task_frame(const uint8_t *packed, unsigned length, unsigned kind, unsigned waiting, unsigned choices);
 #endif

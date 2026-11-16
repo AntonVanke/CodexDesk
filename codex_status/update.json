@@ -1,0 +1,4 @@
+{
+  "app": {"version": "1.7.0", "asset": "CodexDesk.exe"},
+  "firmware": {"version": "1.6.0", "asset": "codex_status.img"}
+}

@@ -24,7 +24,28 @@ def read_usage():
         creationflags=subprocess.CREATE_NO_WINDOW)
     if process.returncode:
         raise RuntimeError(process.stderr.strip() or process.stdout.strip())
-    result = json.loads(process.stdout)
+    return parse_usage(process.stdout)
+
+
+async def read_usage_async():
+    process = await asyncio.create_subprocess_exec(
+        'powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(USAGE_SCRIPT),'-Json',
+        stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        async with asyncio.timeout(45):
+            output,error = await process.communicate()
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    if process.returncode:
+        raise RuntimeError((error or output).decode('utf8',errors='replace').strip())
+    return parse_usage(output)
+
+
+def parse_usage(text):
+    result = json.loads(text)
     windows = [w for w in result['windows'] if w['limitId']=='codex'
                and w['remainingPercent'] is not None and w['resetsAt'] is not None]
     if not windows: raise RuntimeError('Codex did not return a usable quota window')

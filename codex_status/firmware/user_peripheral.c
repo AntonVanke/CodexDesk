@@ -13,7 +13,7 @@
 volatile struct quota_packet received;
 volatile uint32_t packets_received;
 static uint32_t current_time, age;
-static uint8_t connected, has_data, dirty, waiting_ack;
+static uint8_t connected, has_data, has_clock, dirty, waiting_ack, alerts;
 static uint8_t connection_index;
 static timer_hnd pairing_timer;
 static uint8_t clock_dirty, upgrade_stage, upgrade_dirty;
@@ -46,13 +46,18 @@ void user_suota_status(uint8_t event) {
 static void animation_tick(void) {
     animation_phase++;
     if (upgrade_stage) upgrade_dirty=1;
+    unsigned enabled=connected && age<180 && !upgrade_stage;
+    if(enabled && (alerts&1) && animation_phase%10==0) GPIO_SetInactive(GPIO_PORT_2,GPIO_PIN_5);
+    else GPIO_SetActive(GPIO_PORT_2,GPIO_PIN_5);
+    if(enabled && (alerts&2) && (animation_phase%5==0 || animation_phase%5==2)) GPIO_SetInactive(GPIO_PORT_2,GPIO_PIN_9);
+    else GPIO_SetActive(GPIO_PORT_2,GPIO_PIN_9);
     app_easy_timer(20, animation_tick);
 }
 
 static void tick(void) {
-    if (has_data) { current_time++; age++; }
-    if (has_data) clock_dirty=1;
-    if (has_data && (age % 60 == 0 || age == 180)) dirty = 1;
+    if (has_clock) { current_time++; clock_dirty=1; }
+    age++;
+    if (age == 180) dirty = 1;
     app_easy_timer(100, tick);
 }
 void user_app_init(void) {
@@ -81,7 +86,7 @@ void user_app_connection(uint8_t idx, struct gapc_connection_req_ind const *para
 }
 void user_app_encrypted(uint8_t idx,uint8_t auth) {
     (void)idx;
-    connected=(auth&GAP_AUTH_MITM)!=0; dirty=1;
+    connected=(auth&GAP_AUTH_MITM)!=0; dirty=1; age=0;
     if(pairing_timer) { app_easy_timer_cancel(pairing_timer); pairing_timer=EASY_TIMER_INVALID_TIMER; }
 }
 void user_app_paired(uint8_t idx) {
@@ -129,8 +134,35 @@ void user_catch_rest_hndl(ke_msg_id_t msgid, void const *param, ke_task_id_t des
     if (msgid == CUSTS1_VAL_WRITE_IND) {
         const struct custs1_val_write_ind *m = param;
         if(!connected) return;
+        if(age>=180) dirty=1;
+        age=0;
+        if(m->handle==CODEX_VALUE && m->length==2 && m->value[0]=='C' && m->value[1]=='H') return;
+        if(m->handle==CODEX_VALUE && m->length==6 && m->value[0]=='C' && m->value[1]=='T') {
+            memcpy(&current_time,m->value+2,4); has_clock=1; clock_dirty=1; return;
+        }
+        if(m->handle==CODEX_VALUE && m->length==3 && m->value[0]=='C' && m->value[1]=='B') {
+            display_brightness(m->value[2]); dirty=1; return;
+        }
+        if(m->handle==CODEX_VALUE && m->length==3 && m->value[0]=='C' && m->value[1]=='E') {
+            alerts=m->value[2]; return;
+        }
+        if(m->handle==CODEX_VALUE && m->length>4 && m->value[0]=='C' && m->value[1]=='M') {
+            unsigned offset=m->value[2]|(m->value[3]<<8);
+            display_model(offset,m->value+4,m->length-4); return;
+        }
+        if(m->handle==CODEX_VALUE && m->length==2 && m->value[0]=='C' && m->value[1]=='Z') {
+            dirty=1; return;
+        }
+        if(m->handle==CODEX_VALUE && m->length==14 && m->value[0]=='C' && m->value[1]=='Q') {
+            received.magic[0]='C'; received.magic[1]='D'; received.version=1;
+            received.remaining=m->value[2]; received.resets=m->value[3]; received.flags=1;
+            memcpy((void *)&received.reset_at,m->value+4,4);
+            memcpy((void *)&received.window_minutes,m->value+8,4);
+            received.sequence=m->value[12]|(m->value[13]<<8);
+            has_data=1; packets_received++; dirty=1; waiting_ack=1; return;
+        }
         if(m->handle==CODEX_VALUE && m->length==2 && m->value[0]=='C' && m->value[1]=='C') {
-            has_data=0; received.flags=0; waiting_ack=0; dirty=1; return;
+            has_data=0; alerts=0; received.flags=0; waiting_ack=0; dirty=1; return;
         }
         if(m->handle==CODEX_VALUE && m->length==2 && m->value[0]=='C' && m->value[1]=='F') {
             pairing_forget(); app_easy_gap_disconnect(connection_index); return;
@@ -172,7 +204,7 @@ void user_catch_rest_hndl(ke_msg_id_t msgid, void const *param, ke_task_id_t des
         if (p->magic[0] != 'C' || p->magic[1] != 'D' || p->version != 1 || p->remaining > 100 || !(p->flags & 1)) return;
         memcpy((void *)&received, p, sizeof(received));
         received.flags &= 0x7f;
-        current_time = p->now; age = 0; has_data = 1;
+        current_time = p->now; age = 0; has_data = 1; has_clock=1;
         packets_received++; dirty = 1; waiting_ack = 1;
     } else if (msgid == CUSTS1_VALUE_REQ_IND) {
         const struct custs1_value_req_ind *m = param;
