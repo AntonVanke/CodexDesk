@@ -80,6 +80,8 @@ QLineEdit:read-only { border-color: transparent; background: #eef4ef; }
 QComboBox::drop-down { border: none; width: 25px; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #e9f2eb; selection-color: #203832; padding: 5px; }
 QSpinBox { min-width: 80px; }
+QSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right; width: 22px; height: 17px; border: none; background: transparent; }
+QSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right; width: 22px; height: 17px; border: none; background: transparent; }
 QPushButton { background: #edf2ee; border: none; border-radius: 8px; padding: 8px 14px; font-weight: 500; }
 QPushButton:hover { background: #e2ebe4; }
 QPushButton:pressed { background: #d5e3da; }
@@ -251,7 +253,7 @@ class Window(QWidget):
         device_row = QHBoxLayout()
         self.pair_input=QLineEdit()
         self.pair_input.setPlaceholderText('输入屏幕配对码')
-        self.pair_input.setMaxLength(15)
+        self.pair_input.setMaxLength(32)
         self.pair_input.setReadOnly(bool(self.address))
         self.pair_input.setText('CodexDesk'+(' · '+self.device_id if self.device_id else '') if self.address else '')
         self.pair_button=QPushButton('解除' if self.address else '连接')
@@ -273,7 +275,6 @@ class Window(QWidget):
         self.interval_spin.setSuffix(' 秒')
         self.interval_spin.setValue(self.interval)
         self.interval_spin.setKeyboardTracking(False)
-        self.interval_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.interval_spin.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.interval_spin.lineEdit().setStyleSheet('border:none; background:transparent; padding:0; min-height:0;')
         self.interval_spin.setEnabled(False)
