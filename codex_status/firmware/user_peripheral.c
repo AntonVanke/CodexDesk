@@ -129,6 +129,9 @@ void user_catch_rest_hndl(ke_msg_id_t msgid, void const *param, ke_task_id_t des
     if (msgid == CUSTS1_VAL_WRITE_IND) {
         const struct custs1_val_write_ind *m = param;
         if(!connected) return;
+        if(m->handle==CODEX_VALUE && m->length==2 && m->value[0]=='C' && m->value[1]=='C') {
+            has_data=0; received.flags=0; waiting_ack=0; dirty=1; return;
+        }
         if(m->handle==CODEX_VALUE && m->length==2 && m->value[0]=='C' && m->value[1]=='F') {
             pairing_forget(); app_easy_gap_disconnect(connection_index); return;
         }

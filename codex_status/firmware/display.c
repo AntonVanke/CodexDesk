@@ -5,6 +5,7 @@
 #include "fonts.inc"
 #include "pairing.h"
 #include "pairing_qr.inc"
+#include "arch_wdg.h"
 #define R16(a) (*(volatile uint16_t *)(a))
 #define SPI R16(0x50001200)
 #define TX R16(0x50001202)
@@ -163,8 +164,12 @@ static void scene(void) {
         text(80,12,"扫码下载 Codex Desk",14,INK);
         int x0=(320-QR_SIZE*3)/2;
         rect(x0,39,QR_SIZE*3,QR_SIZE*3,0xffff);
-        for(unsigned y=0;y<QR_SIZE;y++) for(unsigned x=0;x<QR_SIZE;x++)
-            if(qr_bits[y*((QR_SIZE+7)/8)+x/8]&(0x80>>(x%8))) rect(x0+x*3,39+y*3,3,3,0);
+        for(unsigned xx=column;xx<column+4;xx++) {
+            if((int)xx<x0 || (int)xx>=x0+QR_SIZE*3) continue;
+            unsigned x=(xx-x0)/3;
+            for(unsigned y=0;y<QR_SIZE;y++)
+                if(qr_bits[y*((QR_SIZE+7)/8)+x/8]&(0x80>>(x%8))) rect(xx,39+y*3,1,3,0);
+        }
         text(139,174,"配对码",14,MUTED);
         text(74,195,pairing_code,20,INK);
         return;
@@ -290,6 +295,7 @@ int display_step(void) {
     for(unsigned i=0;i<6;i++) R16(pins[i])=saved[i];
     SPI1=ctrl1; SPI=ctrl;
     column+=4;
+    wdg_reload(WATCHDOG_DEFAULT_PERIOD);
     if(column==320) display_frames++;
     return column<320;
 }

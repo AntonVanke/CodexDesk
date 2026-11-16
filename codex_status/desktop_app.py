@@ -368,6 +368,7 @@ class Window(QWidget):
         self.badge.setText(state)
         self.device_address.setText(('已连接 · '+self.device_id) if state=='已连接' and self.device_id else state if address else '配对码显示在屏幕二维码下方')
         self.pair_button.setEnabled(state!='配对中' and not self.upgrading)
+        self.pair_input.setEnabled(state!='配对中' and not self.upgrading)
         self.sync_button.setEnabled(state == '已连接' and bool(self.current_account))
         self.upgrade_button.setEnabled(state=='已连接' and not self.upgrading)
 
@@ -377,6 +378,7 @@ class Window(QWidget):
         self.account_label.setText(account['name'] if account else '未登录 Codex')
         if previous!=account:
             self.quota.setText('—');self.progress.setValue(0);self.reset_label.setText('—')
+            self.period.setText('剩余额度')
             self.resets_label.setText('');self.until_reset.setText('');self.reset_at=0
         if self.name_mode==0:
             self.username=account['name'] if account else '未登录'
@@ -398,6 +400,7 @@ class Window(QWidget):
             self.status.setText('请输入完整配对码，例如 A1B2C3-123456')
             return
         self.pair_button.setEnabled(False)
+        self.pair_input.setEnabled(False)
         self.bridge.connect_code(code)
 
     def paired(self,address,identifier):
@@ -407,6 +410,7 @@ class Window(QWidget):
         self.pair_input.setText('CodexDesk · '+identifier if address else '')
         self.pair_button.setText('解除' if address else '连接')
         self.pair_button.setEnabled(True)
+        self.pair_input.setEnabled(True)
         self.status.setText('配对已保存' if address else '已解除配对')
 
     def set_busy(self, busy):
@@ -492,6 +496,7 @@ class Window(QWidget):
 
     def show_error(self, message, detail):
         self.last_success = False
+        self.pair_button.setEnabled(True)
         self.status.setText(message)
         self.status.setToolTip(detail)
 

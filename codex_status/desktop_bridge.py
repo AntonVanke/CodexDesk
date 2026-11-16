@@ -33,7 +33,6 @@ class DesktopBridge:
         self.account = None
         self.snapshot = {'tasks': [], 'running': 0, 'waiting': 0, 'unread': 0}
         self.manual_requested = False
-        self.forget_requested = False
 
     def set_profile(self, profile):
         def update():
@@ -105,10 +104,22 @@ class DesktopBridge:
         self.task=self.loop.create_task(self.monitor())
 
     def forget(self):
-        def request():
-            self.forget_requested=True
-            self.wake.set()
-        self.loop.call_soon_threadsafe(request)
+        asyncio.run_coroutine_threadsafe(self.forget_current(),self.loop)
+
+    async def forget_current(self):
+        try:
+            address=self.address
+            if self.client and self.client.is_connected:
+                async with self.io:
+                    await self.client.write_gatt_char(CHARACTERISTIC,b'CF',response=True)
+            self.task.cancel()
+            with suppress(asyncio.CancelledError):await self.task
+            await unpair(address)
+            self.address=''
+            self.events.paired.emit('','')
+            self.task=self.loop.create_task(self.monitor())
+        except Exception as error:
+            self.events.error.emit('解除配对未完成',str(error))
 
     async def observe(self):
         while True:
@@ -116,8 +127,13 @@ class DesktopBridge:
             if account != self.account:
                 self.account = account
                 self.tasks = CodexTasks()
+                self.snapshot = {'tasks': [], 'running': 0, 'waiting': 0, 'unread': 0}
                 self.last_frame = None
+                self.events.tasks.emit(self.snapshot)
                 self.events.account.emit(account)
+                if self.client and self.client.is_connected and not self.upgrading:
+                    async with self.io:
+                        await self.client.write_gatt_char(CHARACTERISTIC,b'CC',response=True)
                 self.wake.set()
             self.snapshot = await asyncio.to_thread(self.tasks.snapshot, account)
             self.events.tasks.emit(self.snapshot)
@@ -260,14 +276,6 @@ class DesktopBridge:
                     try:
                         while client.is_connected:
                             self.wake.clear()
-                            if self.forget_requested:
-                                self.forget_requested=False
-                                async with self.io:
-                                    await client.write_gatt_char(CHARACTERISTIC,b'CF',response=True)
-                                await unpair(self.address)
-                                self.address=''
-                                self.events.paired.emit('','')
-                                break
                             if self.firmware_path:
                                 if panel:
                                     panel.cancel()
