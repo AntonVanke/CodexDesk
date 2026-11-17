@@ -13,7 +13,6 @@ from codex_tasks import CodexTasks
 from task_screen import TaskCarousel, pack_bitmap, render_model
 from account import read_account
 from pair_device import pair_with_pin, unpair
-from source_watch import SourceWatch
 from version import version_tuple
 
 TASK_CHARACTERISTIC = 'cdc00003-7a2b-4f3d-9a10-145850000001'
@@ -36,7 +35,6 @@ class DesktopBridge:
         self.snapshot = {'tasks': [], 'running': 0, 'waiting': 0, 'unread': 0}
         self.manual_requested = False
         self.quota = None
-        self.quota_refresh = True
         self.quota_checked = 0
         self.sent_quota = None
         self.sent_profile = None
@@ -86,22 +84,19 @@ class DesktopBridge:
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.wake = asyncio.Event()
-        self.source_dirty = asyncio.Event()
+        self.usage_wake = asyncio.Event()
         self.panel_wake = asyncio.Event()
         self.io = asyncio.Lock()
-        self.watcher = SourceWatch(lambda: self.loop.call_soon_threadsafe(self.source_dirty.set))
-        self.source_dirty.set()
         self.task = self.loop.create_task(self.monitor())
         self.observer = self.loop.create_task(self.observe())
+        self.usage_reader = self.loop.create_task(self.collect_usage())
         self.events.ready.emit()
         self.loop.run_forever()
 
     def refresh(self):
         def request():
             self.manual_requested=True
-            self.quota_refresh=True
-            self.source_dirty.set()
-            self.wake.set()
+            self.usage_wake.set()
         self.loop.call_soon_threadsafe(request)
 
     def connect_code(self, code):
@@ -147,9 +142,6 @@ class DesktopBridge:
 
     async def observe(self):
         while True:
-            await self.source_dirty.wait()
-            self.source_dirty.clear()
-            await asyncio.sleep(0.2)
             account = await asyncio.to_thread(read_account)
             if account != self.account:
                 self.account = account
@@ -158,7 +150,7 @@ class DesktopBridge:
                 self.last_frame = None
                 self.quota = None
                 self.sent_quota = None
-                self.quota_refresh = True
+                self.usage_wake.set()
                 self.quota_checked = 0
                 self.events.tasks.emit(self.snapshot)
                 self.events.account.emit(account)
@@ -171,7 +163,7 @@ class DesktopBridge:
                 before = {t['id'] for t in self.snapshot['tasks'] if t['active']}
                 after = {t['id'] for t in snapshot['tasks'] if t['active']}
                 if before - after:
-                    self.quota_refresh = True
+                    self.usage_wake.set()
                 self.snapshot = snapshot
                 self.events.tasks.emit(snapshot)
                 self.panel_wake.set()
@@ -188,9 +180,37 @@ class DesktopBridge:
                     self.quota_checked = datetime.fromisoformat(stamp).timestamp()
                     self.events.updated.emit(self.quota)
                     self.wake.set()
+            await asyncio.sleep(0.5)
 
-    def source_changed(self):
-        self.loop.call_soon_threadsafe(self.source_dirty.set)
+    async def collect_usage(self):
+        while True:
+            delay = self.quota['reset']-time.time() if self.quota and self.quota['reset']>time.time() else None
+            try:
+                await asyncio.wait_for(self.usage_wake.wait(),timeout=max(0,delay) if delay is not None else None)
+            except asyncio.TimeoutError:
+                pass
+            self.usage_wake.clear()
+            manual,self.manual_requested=self.manual_requested,False
+            if not self.account:
+                if manual:self.events.busy.emit(False)
+                continue
+            if manual:self.events.busy.emit(True)
+            try:
+                account=self.account
+                window,resets=await read_usage_async()
+                if account!=self.account or account!=read_account():
+                    self.usage_wake.set()
+                    continue
+                self.quota_checked=time.time()
+                self.quota={'remaining':round(window['remainingPercent']),'reset':int(window['resetsAt']),
+                    'window_minutes':window['windowDurationMins'],'resets':resets,'plan':window['plan'],
+                    'synced_at':time.time(),'address':self.address}
+                self.events.updated.emit(self.quota)
+                self.wake.set()
+            except Exception as error:
+                self.events.error.emit('额度读取未完成',str(error))
+            finally:
+                if manual:self.events.busy.emit(False)
 
     def set_device(self, address):
         asyncio.run_coroutine_threadsafe(self.switch_device(address), self.loop)
@@ -225,49 +245,26 @@ class DesktopBridge:
             pass
         self.wake.clear()
 
-    async def sync(self, client, manual=False):
-        if not self.account:
-            if manual:self.events.busy.emit(False)
+    async def sync(self, client):
+        data = self.quota
+        if data is None:
             return
-        if manual: self.events.busy.emit(True)
-        try:
-            if self.quota_refresh:
-                self.quota_refresh = False
-                account = read_account()
-                window, resets = await read_usage_async()
-                if account != read_account():
-                    self.quota_refresh = True
-                    self.wake.set()
-                    return
-                self.quota_checked = time.time()
-                self.quota = {'remaining': round(window['remainingPercent']), 'reset': int(window['resetsAt']),
-                    'window_minutes': window['windowDurationMins'], 'resets': resets, 'plan': window['plan'],
-                    'synced_at': time.time(), 'address': self.address}
-                self.events.updated.emit(self.quota)
-            data = self.quota
-            if data is None:
-                return
-            quota = (data['remaining'], 255 if data['resets'] is None else min(254,data['resets']),
-                     data['reset'], data['window_minutes'])
-            if quota == self.sent_quota:
-                return
-            self.sequence = (self.sequence + 1) & 0xffff
-            sequence = self.sequence
-            packet = struct.pack('<2sBBIIH',b'CQ',*quota,sequence)
-            async with self.io:
-                await client.write_gatt_char(CHARACTERISTIC, packet, response=True)
-                async with asyncio.timeout(15):
-                    while True:
-                        await asyncio.sleep(0.2)
-                        ack = PACKET.unpack(bytes(await client.read_gatt_char(CHARACTERISTIC)))
-                        if ack[-1] == sequence and ack[4] & 0x80:
-                            break
-            self.sent_quota = quota
-        except Exception:
-            self.quota_refresh = True
-            raise
-        finally:
-            if manual: self.events.busy.emit(False)
+        quota = (data['remaining'],255 if data['resets'] is None else min(254,data['resets']),
+                 data['reset'],data['window_minutes'])
+        if quota==self.sent_quota:
+            return
+        self.sequence=(self.sequence+1)&0xffff
+        sequence=self.sequence
+        packet=struct.pack('<2sBBIIH',b'CQ',*quota,sequence)
+        async with self.io:
+            await client.write_gatt_char(CHARACTERISTIC,packet,response=True)
+            async with asyncio.timeout(15):
+                while True:
+                    await asyncio.sleep(0.2)
+                    ack=PACKET.unpack(bytes(await client.read_gatt_char(CHARACTERISTIC)))
+                    if ack[-1]==sequence and ack[4]&0x80:
+                        break
+        self.sent_quota=quota
 
     async def send_frame(self, client, frame):
         bitmap, kind, waiting, choices = frame
@@ -377,7 +374,6 @@ class DesktopBridge:
                                 panel.result()
                             if self.observer.done():
                                 self.observer.result()
-                            manual,self.manual_requested=self.manual_requested,False
                             now = time.monotonic()
                             async with self.io:
                                 if now >= clock_at:
@@ -387,14 +383,9 @@ class DesktopBridge:
                                     await client.write_gatt_char(CHARACTERISTIC,b'CH',response=True)
                                     heartbeat_at = now+60
                                     self.events.contact.emit(time.time())
-                            await self.sync(client,manual)
+                            await self.sync(client)
                             if self.firmware_path is None:
                                 delay = min(heartbeat_at,clock_at)-time.monotonic()
-                                if self.quota and self.quota['reset']>time.time():
-                                    delay = min(delay,self.quota['reset']-time.time())
-                                elif self.quota and self.quota_checked<self.quota['reset']:
-                                    self.quota_refresh=True
-                                    continue
                                 await self.wait(max(0.1,delay))
                     finally:
                         if panel:
@@ -411,11 +402,13 @@ class DesktopBridge:
                 await self.wait(10)
 
     async def close(self):
-        self.watcher.close()
         self.observer.cancel()
+        self.usage_reader.cancel()
         self.task.cancel()
         with suppress(asyncio.CancelledError):
             await self.observer
+        with suppress(asyncio.CancelledError):
+            await self.usage_reader
         with suppress(asyncio.CancelledError):
             await self.task
         pending=[task for task in asyncio.all_tasks() if task is not asyncio.current_task()]

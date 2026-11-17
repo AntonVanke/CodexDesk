@@ -504,7 +504,7 @@ class Window(QWidget):
         self.pair_button.setEnabled(state!='配对中' and not self.upgrading)
         self.pair_input.setEnabled(state!='配对中' and not self.upgrading)
         self.unpair_button.setEnabled(bool(self.address) and not self.upgrading)
-        self.sync_button.setEnabled(state == '已连接' and bool(self.current_account))
+        self.sync_button.setEnabled(bool(self.current_account) and not self.upgrading)
         self.upgrade_button.setEnabled(state in ('已连接','请升级固件') and not self.upgrading)
         if state=='已连接':
             self.last_contact=time.time()
@@ -541,7 +541,7 @@ class Window(QWidget):
         if self.name_mode==0:
             self.username=account['name'] if account else '未登录'
             self.bridge.set_profile(self.screen_profile())
-        self.sync_button.setEnabled(bool(account) and self.badge.text()=='已连接')
+        self.sync_button.setEnabled(bool(account) and not self.upgrading)
 
     def manual_sync(self):
         if self.sync_button.isEnabled():
@@ -574,7 +574,7 @@ class Window(QWidget):
         self.set_status('配对已保存' if address else '已解除配对','success')
 
     def set_busy(self, busy):
-        self.sync_button.setEnabled(not busy and not self.upgrading and bool(self.current_account) and self.badge.text()=='已连接')
+        self.sync_button.setEnabled(not busy and not self.upgrading and bool(self.current_account))
         self.sync_button.setText('手动同步中…' if busy else '手动同步')
 
     def update_quota(self, data):
