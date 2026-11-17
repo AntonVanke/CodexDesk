@@ -5,6 +5,7 @@ import time
 import struct
 
 from bleak import BleakClient, BleakScanner
+from winrt.windows.devices.bluetooth import BluetoothLEDevice, BluetoothAddressType, BluetoothLEPreferredConnectionParameters
 from send_usage import read_usage_async, PACKET, CHARACTERISTIC
 from upgrade import upload_firmware, REVISION
 from pathlib import Path
@@ -289,35 +290,51 @@ class DesktopBridge:
                         return
                     await asyncio.sleep(0.1)
 
-    async def task_updates(self, client):
-        carousel = TaskCarousel()
+    async def sync_panel(self, client, carousel):
+        snapshot = self.snapshot
+        alerts = int(any(t['completed_unread'] for t in snapshot['tasks'])) | (2 if snapshot['waiting'] else 0)
+        deadline = carousel.deadline
+        frame = carousel.frame(snapshot, time.monotonic())
+        selected = carousel.selected if self.profile[3] else snapshot['tasks'][int(time.monotonic()/5)%len(snapshot['tasks'])] if snapshot['tasks'] else None
+        model = render_model(selected)
+        if self.profile[3] and frame != self.last_frame:
+            started = time.monotonic()
+            await self.send_frame(client, frame)
+            if carousel.deadline != deadline:
+                carousel.deadline += time.monotonic()-started
+            self.last_frame = frame
+        async with self.io:
+            if alerts != self.sent_alerts:
+                await client.write_gatt_char(CHARACTERISTIC,b'CE'+bytes((alerts,)),response=True)
+                self.sent_alerts = alerts
+            if model != self.sent_model:
+                for offset in range(0,len(model),16):
+                    if self.sent_model is None or model[offset:offset+16] != self.sent_model[offset:offset+16]:
+                        await client.write_gatt_char(CHARACTERISTIC,b'CM'+struct.pack('<H',offset)+model[offset:offset+16],response=True)
+                await client.write_gatt_char(CHARACTERISTIC,b'CZ',response=True)
+                self.sent_model = model
+
+    async def sync_initial(self, client, carousel):
+        self.sent_profile = self.sent_quota = self.sent_model = self.sent_alerts = None
         self.last_frame = None
+        with await BluetoothLEDevice.from_bluetooth_address_with_bluetooth_address_type_async(
+                int(client.address.replace(':',''),16), BluetoothAddressType.RANDOM) as device:
+            with device.request_preferred_connection_parameters(BluetoothLEPreferredConnectionParameters.throughput_optimized):
+                async with self.io:
+                    await client.write_gatt_char(CHARACTERISTIC,b'CT'+struct.pack('<I',int(time.time())),response=True)
+                    await client.write_gatt_char(CHARACTERISTIC,b'CH',response=True)
+                    self.events.contact.emit(time.time())
+                await self.sync(client)
+                await self.apply_profile(client)
+                if client.services.get_characteristic(TASK_CHARACTERISTIC):
+                    await self.sync_panel(client, carousel)
+                await self.sync(client)
+
+    async def task_updates(self, client, carousel):
         try:
             while client.is_connected:
                 self.panel_wake.clear()
-                snapshot = self.snapshot
-                alerts = int(any(t['completed_unread'] for t in snapshot['tasks'])) | (2 if snapshot['waiting'] else 0)
-                deadline = carousel.deadline
-                frame = carousel.frame(snapshot, time.monotonic())
-                selected = carousel.selected if self.profile[3] else snapshot['tasks'][int(time.monotonic()/5)%len(snapshot['tasks'])] if snapshot['tasks'] else None
-                model = render_model(selected)
-                async with self.io:
-                    if alerts != self.sent_alerts:
-                        await client.write_gatt_char(CHARACTERISTIC,b'CE'+bytes((alerts,)),response=True)
-                        self.sent_alerts = alerts
-                    if model != self.sent_model:
-                        for offset in range(0,len(model),16):
-                            if self.sent_model is None or model[offset:offset+16] != self.sent_model[offset:offset+16]:
-                                await client.write_gatt_char(CHARACTERISTIC,b'CM'+struct.pack('<H',offset)+model[offset:offset+16],response=True)
-                        await client.write_gatt_char(CHARACTERISTIC,b'CZ',response=True)
-                        self.sent_model = model
-                if self.profile[3]:
-                    if frame != self.last_frame:
-                        started = time.monotonic()
-                        await self.send_frame(client, frame)
-                        if carousel.deadline != deadline:
-                            carousel.deadline += time.monotonic()-started
-                        self.last_frame = frame
+                await self.sync_panel(client, carousel)
                 timeout = max(0.1,min(5,carousel.deadline-time.monotonic())) if self.profile[3] else 5
                 try:
                     await asyncio.wait_for(self.panel_wake.wait(), timeout)
@@ -339,7 +356,6 @@ class DesktopBridge:
                 async with BleakClient(self.address, timeout=20, winrt={'use_cached_services': False},
                                        disconnected_callback=lambda _: self.loop.call_soon_threadsafe(self.wake.set)) as client:
                     self.client=client
-                    self.sent_profile = self.sent_quota = self.sent_model = self.sent_alerts = None
                     self.events.connection.emit('已连接', self.address)
                     revision=bytes(await client.read_gatt_char(REVISION)).decode().rstrip('\0')
                     self.events.firmware.emit(revision)
@@ -353,9 +369,11 @@ class DesktopBridge:
                         self.events.connection.emit('请升级固件', self.address)
                         while client.is_connected and self.firmware_path is None:
                             await self.wait(3600)
-                    await self.apply_profile(client)
-                    clock_at = heartbeat_at = 0
-                    panel = self.loop.create_task(self.task_updates(client)) if client.services.get_characteristic(TASK_CHARACTERISTIC) else None
+                    carousel = TaskCarousel()
+                    initialized_at = time.monotonic()
+                    await self.sync_initial(client, carousel)
+                    clock_at, heartbeat_at = initialized_at+3600, initialized_at+60
+                    panel = self.loop.create_task(self.task_updates(client, carousel)) if client.services.get_characteristic(TASK_CHARACTERISTIC) else None
                     try:
                         while client.is_connected:
                             self.wake.clear()
